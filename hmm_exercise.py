@@ -13,6 +13,23 @@ def log2(p):
     else:
         return math.log2(p)
 
+def log_sum(a, b):
+    if a == -math.inf:
+        return b
+    if b == -math.inf:
+        return a
+    hi, lo = max(a, b), min(a, b)
+    return hi + math.log2(1 + 2 ** (lo - hi))
+
+def agreement(z1, z2):
+    if len(z1) != len(z2):
+        raise ValueError("paths must have the same length")
+    same = 0
+    for s1, s2 in zip(z1, z2):
+        if s1 == s2:
+            same += 1
+    return same / len(z1)
+
 class HMM:
     """Hidden Markov Model."""
     def __init__(self, states, alphabet, pi, a, e):
@@ -152,6 +169,57 @@ class HMM:
         path.reverse()
         return "".join(path), v[-1][last]
 
+# ==========Task 3: Forward, Backward, posterior========
+    def forward(self, x):
+        f = [{}]
+        for k in self.states:
+            f[0][k] = self.log_pi[k] + self.log_e[k][x[0]]
+        for i in range(1, len(x)):
+            f.append({})
+            for k in self.states:
+                s = -math.inf
+                for l in self.states:
+                    s = log_sum(s, f[i - 1][l] + self.log_a[l][k])
+                f[i][k] = s + self.log_e[k][x[i]]
+        log_px = -math.inf
+        for k in self.states:
+            log_px = log_sum(log_px, f[-1][k])
+        return f, log_px
+
+    def backward(self, x):
+        n = len(x)
+        b = [{} for _ in range(n)]
+        for k in self.states:
+            b[n - 1][k] = 0.0  # log2(1)
+        for i in range(n - 2, -1, -1):
+            for k in self.states:
+                s = -math.inf
+                for l in self.states:
+                    s = log_sum(s, self.log_a[k][l] + self.log_e[l][x[i + 1]] + b[i + 1][l])
+                b[i][k] = s
+        log_px = -math.inf
+        for k in self.states:
+            log_px = log_sum(log_px, self.log_pi[k] + self.log_e[k][x[0]] + b[0][k])
+        return b, log_px
+
+    def posterior(self, x):
+        f, log_px = self.forward(x)
+        b, _ = self.backward(x)
+        post = []
+        for i in range(len(x)):
+            post.append({k: 2 ** (f[i][k] + b[i][k] - log_px) for k in self.states})
+        return post
+
+    def posterior_path(self, x):
+        path = []
+        for col in self.posterior(x):
+            best = None
+            for k in self.states:
+                if best is None or col[k] > col[best]:  # first state wins ties
+                    best = k
+            path.append(best)
+        return "".join(path)
+
 
 def read_model(path):
     with open(path) as f:
@@ -164,6 +232,7 @@ def read_model(path):
 # =================    SELF CHECKS =====================================================
 #=======================================================================================
 
+# ================= TASK 1 =============
 def _self_check_task1(m, sequences):
     for x in sequences:
         for path in itertools.product(m.states, repeat=len(x)):
@@ -173,6 +242,7 @@ def _self_check_task1(m, sequences):
         best, best_p, total = m.brute_force(x)
         assert 0 < best_p <= total <= 1 + 1e-12
 
+# ================= TASK 2 =============
 def _self_check_task2(m, length=5):
     for n in range(1, length + 1):
         for s in itertools.product(m.alphabet, repeat=n):
@@ -182,6 +252,26 @@ def _self_check_task2(m, length=5):
             assert path == best, (x, path, best)
             assert math.isclose(2 ** score, best_p), (x, score, best_p)
             assert math.isclose(score, m.log_joint(x, path)), (x, path)
+
+# ================= TASK 3 =============
+def _self_check_task3(m, length=5):
+    for n in range(1, length + 1):
+        for s in itertools.product(m.alphabet, repeat=n):
+            x = "".join(s)
+            f, lf = m.forward(x)
+            b, lb = m.backward(x)
+            assert math.isclose(lf, lb), (x, lf, lb)                       # 1
+            _, _, total = m.brute_force(x)
+            assert math.isclose(2 ** lf, total), (x, lf, total)            # 2
+            post = m.posterior(x)
+            for i in range(n):
+                assert math.isclose(sum(post[i].values()), 1.0), (x, i)    # 3
+                for k in m.states:                                         # 4
+                    pk = 0.0
+                    for path in itertools.product(m.states, repeat=n):
+                        if path[i] == k:
+                            pk += m.joint_probability(x, "".join(path))
+                    assert math.isclose(post[i][k], pk / total), (x, i, k)
 
 if __name__ == "__main__":
     import sys
@@ -200,11 +290,42 @@ if __name__ == "__main__":
         _self_check_task2(m)
         print(f"{fn}: Task 2 self-checks OK")
 
-    # self-check 3: the paper table
     m = read_model("toy_model.json")
     x = "phchc"
     path, score = m.viterbi(x)
     print("Viterbi:", path, round(score, 2))
     for k in m.states:
         print(f"v({k}, i):", [round(m.last_v[i][k], 2) for i in range(len(x))])
+
+    # self-check 5: the paper tables of Task 3
+    f, log_px = m.forward(x)
+    b, _ = m.backward(x)
+    post = m.posterior(x)
+    print("P(x) =", f"{2 ** log_px:.4g}")
+    for k in m.states:
+        print(f"f({k}, i):", [f"{2 ** f[i][k]:.4g}" for i in range(len(x))])
+    for k in m.states:
+        print(f"b({k}, i):", [f"{2 ** b[i][k]:.4g}" for i in range(len(x))])
+    print("posterior at 2:", {k: round(post[2][k], 4) for k in m.states})
+
+    # Think about it (a)
+    pp = m.posterior_path(x)
+    print("posterior path:", pp, f"{m.joint_probability(x, pp):.4g}",
+          "| Viterbi path:", path, f"{m.joint_probability(x, path):.4g}")
+
+    # Decode the simulated sequences
+    from Bio import SeqIO
+
+    seqs = {r.id: str(r.seq) for r in SeqIO.parse("sequences.fasta", "fasta")}
+    true = {r.id: str(r.seq) for r in SeqIO.parse("true_paths.fasta", "fasta")}
+    print(f"{'id':<10}{'len':>6}{'Viterbi':>10}{'posterior':>11}")
+    for sid, x in seqs.items():
+        z = true[sid]
+        vpath, vscore = m.viterbi(x)
+        ppath = m.posterior_path(x)
+        # self-checks
+        assert agreement(z, z) == 1.0
+        assert math.isclose(vscore, m.log_joint(x, vpath))
+        assert math.isclose(m.forward(x)[1], m.backward(x)[1])
+        print(f"{sid:<10}{len(x):>6}{agreement(vpath, z):>10.3f}{agreement(ppath, z):>11.3f}")
 
