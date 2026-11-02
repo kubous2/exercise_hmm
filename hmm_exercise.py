@@ -92,10 +92,73 @@ class HMM:
                 best_path, best_p = z, p
         return best_path, best_p, total
 
+# ===================Task 2: Viterbi ==================
+    def viterbi(self, x):
+        # log2 Viterbi: v[i][k] = best log2 score of a path ending in k at i
+        v = [{}]
+        back = [{}]
+        for k in self.states:
+            v[0][k] = self.log_pi[k] + self.log_e[k][x[0]]
+            back[0][k] = None
+
+        for i in range(1, len(x)):
+            v.append({})
+            back.append({})
+            for k in self.states:
+                best_l, best_score = None, -math.inf
+                for l in self.states:
+                    score = v[i - 1][l] + self.log_a[l][k]
+                    if best_l is None or score > best_score:  # first state wins ties
+                        best_l, best_score = l, score
+                v[i][k] = best_score + self.log_e[k][x[i]]
+                back[i][k] = best_l
+
+        # best state in the last column
+        last = None
+        for k in self.states:
+            if last is None or v[-1][k] > v[-1][last]:
+                last = k
+
+        # traceback
+        path = [last]
+        for i in range(len(x) - 1, 0, -1):
+            path.append(back[i][path[-1]])
+        path.reverse()
+        self.last_v = v
+        return "".join(path), v[-1][last]
+
+    def viterbi_plain(self, x):
+        # same algorithm with plain probabilities
+        v = [{k: self.pi[k] * self.e[k][x[0]] for k in self.states}]
+        back = [{}]
+        for i in range(1, len(x)):
+            v.append({})
+            back.append({})
+            for k in self.states:
+                best_l, best_p = None, -1.0
+                for l in self.states:
+                    p = v[i - 1][l] * self.a[l][k]
+                    if p > best_p:
+                        best_l, best_p = l, p
+                v[i][k] = best_p * self.e[k][x[i]]
+                back[i][k] = best_l
+        last = None
+        for k in self.states:
+            if last is None or v[-1][k] > v[-1][last]:
+                last = k
+        path = [last]
+        for i in range(len(x) - 1, 0, -1):
+            path.append(back[i][path[-1]])
+        path.reverse()
+        return "".join(path), v[-1][last]
+
+
 def read_model(path):
     with open(path) as f:
         d = json.load(f)
     return HMM(d["states"], d["alphabet"], d["pi"], d["a"], d["e"])
+
+
 
 #=======================================================================================
 # =================    SELF CHECKS =====================================================
@@ -109,6 +172,16 @@ def _self_check_task1(m, sequences):
             assert math.isclose(m.log_joint(x, z), log2(p)), (x, z)
         best, best_p, total = m.brute_force(x)
         assert 0 < best_p <= total <= 1 + 1e-12
+
+def _self_check_task2(m, length=5):
+    for n in range(1, length + 1):
+        for s in itertools.product(m.alphabet, repeat=n):
+            x = "".join(s)
+            path, score = m.viterbi(x)
+            best, best_p, total = m.brute_force(x)
+            assert path == best, (x, path, best)
+            assert math.isclose(2 ** score, best_p), (x, score, best_p)
+            assert math.isclose(score, m.log_joint(x, path)), (x, path)
 
 if __name__ == "__main__":
     import sys
@@ -124,3 +197,14 @@ if __name__ == "__main__":
                 for s in itertools.islice(itertools.product(m.alphabet, repeat=n), 6)]
         _self_check_task1(m, seqs)
         print(f"{fn}: Task 1 self-checks OK")
+        _self_check_task2(m)
+        print(f"{fn}: Task 2 self-checks OK")
+
+    # self-check 3: the paper table
+    m = read_model("toy_model.json")
+    x = "phchc"
+    path, score = m.viterbi(x)
+    print("Viterbi:", path, round(score, 2))
+    for k in m.states:
+        print(f"v({k}, i):", [round(m.last_v[i][k], 2) for i in range(len(x))])
+
